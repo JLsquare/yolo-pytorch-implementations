@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
@@ -36,11 +37,11 @@ def plot_image(image: torch.Tensor, boxes: list):
     plt.show()
 
 
-def get_bboxes(loader: torch.utils.data.DataLoader, model: nn.Module, iou_threshold: float, 
+def get_bboxes_yolov1(loader: torch.utils.data.DataLoader, model: nn.Module, iou_threshold: float, 
                prob_threshold: float, box_format: str = "midpoint", device: str = "cuda", 
                split_size: int = 7, num_boxes: int = 2, num_classes: int = 20) -> list:
     """
-    Get bboxes from loader
+    Get bboxes from loader for YOLOv1
 
     param: loader (torch.utils.data.DataLoader) - data loader to get data from
     param: model (nn.Module) - model to get predictions from
@@ -67,8 +68,8 @@ def get_bboxes(loader: torch.utils.data.DataLoader, model: nn.Module, iou_thresh
             predictions = model(x)
 
         batch_size = x.shape[0]
-        true_bboxes = cellboxes_to_boxes(labels, split_size, num_boxes, num_classes)
-        bboxes = cellboxes_to_boxes(predictions, split_size, num_boxes, num_classes)
+        true_bboxes = cells_to_bboxes_yolov1(labels, split_size, num_boxes, num_classes)
+        bboxes = cells_to_bboxes_yolov1(predictions, split_size, num_boxes, num_classes)
 
         for idx in range(batch_size):
             nms_boxes = non_max_suppression(
@@ -90,6 +91,107 @@ def get_bboxes(loader: torch.utils.data.DataLoader, model: nn.Module, iou_thresh
     model.train()
     return all_pred_boxes, all_true_boxes
 
+def get_bboxes_yolov3(loader: torch.utils.data.DataLoader, model: nn.Module, iou_threshold: float,
+                      anchors: list, prob_threshold: float, box_format: str = "midpoint", device: str = "cuda") -> list:
+    """
+    Get bboxes from loader for YOLOv3 and YOLOv4 (multiple scales and anchors)
+
+    param: loader (torch.utils.data.DataLoader) - data loader to get data from
+    param: model (nn.Module) - model to get predictions from
+    param: iou_threshold (float) - threshold where predicted bboxes is correct
+    param: anchors (list) - anchors used in model
+    param: threshold (float) - threshold where predicted bboxes is correct
+    param: box_format (str) - midpoint/corners, if boxes (x, y, w, h) or (x1, y1, x2, y2)
+    param: device (str) - cuda/cpu
+    return: all_pred_boxes (list) - list of all predicted boxes
+    """
+    """
+    model.eval()
+    train_idx = 0
+    all_pred_boxes = []
+    all_true_boxes = []
+    for batch_idx, (x, labels) in enumerate(tqdm(loader)):
+        x = x.to(device)
+        labels = labels[2].to(device)
+
+        with torch.no_grad():
+            predictions = model(x)
+
+        batch_size = x.shape[0]
+        bboxes = [[] for _ in range(batch_size)]
+        for i in range(3):
+            split_size = predictions[i].shape[2]
+            anchor = torch.tensor([*anchors[i]]).to(device) * split_size
+
+            boxes_scale_i = cells_to_bboxes_yolov3(
+                predictions[i], anchor, splite_size=split_size
+            )
+            for idx, (box) in enumerate(boxes_scale_i):
+                bboxes[idx] += box
+
+        true_bboxes = cells_to_bboxes_yolov3(
+            labels, anchor, splite_size=split_size
+        )
+
+        for idx in range(batch_size):
+            nms_boxes = non_max_suppression(
+                bboxes=bboxes[idx], iou_threshold=iou_threshold, prob_threshold=prob_threshold, box_format=box_format
+            )
+
+            for nms_box in nms_boxes:
+                all_pred_boxes.append([train_idx] + nms_box)
+
+            for box in true_bboxes[idx]:
+                if box[1] > prob_threshold:
+                    all_true_boxes.append([train_idx] + box)
+
+            train_idx += 1
+
+    print(f"Processed all batches, found {len(all_pred_boxes)} pred boxes and {len(all_true_boxes)} true boxes")  # Add this line
+    model.train()
+    return all_pred_boxes, all_true_boxes
+    """
+    model.eval()
+    train_idx = 0
+    all_pred_boxes = []
+    all_true_boxes = []
+    for batch_idx, (x, labels) in enumerate(tqdm(loader)):
+        x = x.to(device)
+        labels = [label.to(device) for label in labels]
+
+        with torch.no_grad():
+            predictions = model(x)
+
+        batch_size = x.shape[0]
+        bboxes = [[] for _ in range(batch_size)]
+        for i in range(3):
+            S = predictions[i].shape[2]
+            anchor = torch.tensor([*anchors[i]]).to(device) * S
+            boxes_scale_i = cells_to_bboxes_yolov3(predictions[i], anchor, split_size=S)
+            for idx, box in enumerate(boxes_scale_i):
+                bboxes[idx] += box
+
+        true_bboxes = cells_to_bboxes_yolov3(labels[2], anchor, split_size=labels[2].shape[2])
+
+        for idx in range(batch_size):
+            nms_boxes = non_max_suppression(
+                bboxes=bboxes[idx],
+                iou_threshold=iou_threshold,
+                prob_threshold=prob_threshold,
+                box_format=box_format
+            )
+
+            for nms_box in nms_boxes:
+                all_pred_boxes.append([train_idx] + nms_box)
+
+            for box in true_bboxes[idx]:
+                if box[1] > prob_threshold:
+                    all_true_boxes.append([train_idx] + box)
+
+            train_idx += 1
+
+    model.train()
+    return all_pred_boxes, all_true_boxes
 
 def convert_cellboxes(predictions: torch.Tensor, split_size: int = 7, num_boxes: int = 2, num_classes: int = 20) -> torch.Tensor:
     """
@@ -128,7 +230,7 @@ def convert_cellboxes(predictions: torch.Tensor, split_size: int = 7, num_boxes:
     return converted_preds
 
 
-def cellboxes_to_boxes(out: torch.Tensor, split_size: int = 7, num_boxes: int = 2, num_classes: int = 20) -> list:
+def cells_to_bboxes_yolov1(out: torch.Tensor, split_size: int = 7, num_boxes: int = 2, num_classes: int = 20) -> list:
     """
     Converts output from model into bounding boxes
 
@@ -150,6 +252,41 @@ def cellboxes_to_boxes(out: torch.Tensor, split_size: int = 7, num_boxes: int = 
         all_bboxes.append(bboxes)
 
     return all_bboxes
+
+def cells_to_bboxes_yolov3(predictions: torch.Tensor, anchors, split_size):
+    """
+    Scales the predictions coming from the model to actual values
+
+    param: predictions (torch.Tensor) - tensor of size (N, 3, S, S, num_classes + 5)
+    param: anchors (torch.Tensor) - tensor of size (3, 2)
+    param: splite_size (int) - number of cells the image is divided in on the width/height
+    return: converted_bboxes (list) - size (N, num_anchors * S * S, 6) [train_idx, class_pred, prob_score
+    """
+    BATCH_SIZE = predictions.shape[0]
+    num_anchors = len(anchors)
+    box_predictions = predictions[..., 1:5]
+    scores = torch.sigmoid(predictions[..., 0:1])
+    best_class = torch.argmax(predictions[..., 5:], dim=-1).unsqueeze(-1)
+
+    anchors = anchors.reshape(1, len(anchors), 1, 1, 2)
+    box_predictions[..., 0:2] = torch.sigmoid(box_predictions[..., 0:2])
+    box_predictions[..., 2:4] = torch.exp(box_predictions[..., 2:4]) * anchors
+
+    cell_indices = (
+        torch.arange(split_size)
+        .repeat(predictions.shape[0], 3, split_size, 1)
+        .unsqueeze(-1)
+        .to(predictions.device)
+    )
+    #x = 1 / splite_size * (box_predictions[..., 0:1] + cell_indices)
+    #y = 1 / splite_size * (box_predictions[..., 1:2] + cell_indices.permute(0, 1, 3, 2, 4))
+    #w_h = 1 / splite_size * box_predictions[..., 2:4]
+    x = (box_predictions[..., 0:1] + cell_indices) / split_size
+    y = (box_predictions[..., 1:2] + cell_indices.permute(0, 1, 3, 2, 4)) / split_size
+    w_h = box_predictions[..., 2:4] / split_size
+
+    converted_bboxes = torch.cat((best_class, scores, x, y, w_h), dim=-1).reshape(BATCH_SIZE, num_anchors * split_size * split_size, 6)
+    return converted_bboxes.tolist()
 
 def save_checkpoint(state: dict, filename: str = "my_checkpoint.pth.tar"):
     """
@@ -174,19 +311,6 @@ def load_checkpoint(checkpoint: dict, model: nn.Module, optimizer: torch.optim.O
     model.load_state_dict(checkpoint["state_dict"])
     if optimizer:
         optimizer.load_state_dict(checkpoint["optimizer"])
-
-class ComposeDetectionTransforms(object):
-    """
-    Composes multiple transforms together, but with bboxes
-    """
-    def __init__(self, transforms: list):
-        self.transforms = transforms
-
-    def __call__(self, img, bboxes):
-        for t in self.transforms:
-            img, bboxes = t(img), bboxes
-
-        return img, bboxes
     
 def trainable_parameters(model: nn.Module) -> int:
     """

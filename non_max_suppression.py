@@ -1,7 +1,7 @@
 import torch
 from intersection_over_union import intersection_over_union
 
-def non_max_suppression(bboxes: list, iou_threshold: float, prob_threshold: float, box_format: str = "corners"):
+def non_max_suppression(bboxes: list, iou_threshold: float, prob_threshold: float, box_format: str = "corners", max_boxes: int = 64) -> list:
     """
     Does Non Max Suppression given bboxes
 
@@ -15,7 +15,7 @@ def non_max_suppression(bboxes: list, iou_threshold: float, prob_threshold: floa
     assert isinstance(bboxes, list)
 
     bboxes = [box for box in bboxes if box[1] > prob_threshold]
-    bboxes = sorted(bboxes, key=lambda x: x[1], reverse=True)
+    bboxes = sorted(bboxes, key=lambda x: x[1], reverse=True)[:max_boxes]
     bboxes_after_nms = []
 
     while bboxes:
@@ -24,8 +24,8 @@ def non_max_suppression(bboxes: list, iou_threshold: float, prob_threshold: floa
         bboxes = [
             box
             for box in bboxes
-            if box[0] != chosen_box[0] 
-            or intersection_over_union(
+            #if box[0] != chosen_box[0] 
+            if intersection_over_union(
                 torch.tensor(chosen_box[2:]),
                 torch.tensor(box[2:]),
                 box_format=box_format,
